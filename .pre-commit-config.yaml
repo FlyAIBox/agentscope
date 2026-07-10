@@ -33,6 +33,7 @@ repos:
                 pb2\.py$
                 | grpc\.py$
                 | ^docs
+                | ^fly-docs
                 | \.html$
             )
         args: [ --disallow-untyped-defs,
@@ -62,7 +63,7 @@ repos:
     hooks:
       - id: flake8
         args: ["--extend-ignore=E203"]
-        exclude: ^docs
+        exclude: ^(docs|fly-docs)
   - repo: https://github.com/pylint-dev/pylint
     rev: v3.0.2
     hooks:
@@ -70,6 +71,7 @@ repos:
         exclude:
             (?x)(
                 ^docs
+                | ^fly-docs
                 | pb2\.py$
                 | grpc\.py$
                 | \.demo$
