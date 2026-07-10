@@ -286,6 +286,61 @@ uv pip install "agentscope[full]"
 uv pip install -e ".[dev]"
 ```
 
+### 6.4 `git commit` 时 mypy 报 `Duplicate module named "main"`
+
+现象：
+
+```text
+mypy.....................................................................Failed
+- hook id: mypy
+- exit code: 2
+
+fly-docs/examples/.../main.py: error: Duplicate module named "main"
+(also at "fly-docs/examples/.../main.py")
+```
+
+原因：
+
+- **mypy** 是 Python 静态类型检查工具，本仓库通过 pre-commit 在每次 `git commit` 时自动运行。
+- mypy 默认按文件名推断模块名。多个目录下都有 `main.py` 时，会被当成同一个模块 `main`，从而报 Duplicate module。
+- 官方文档目录 `docs/` 已在 `.pre-commit-config.yaml` 中被 mypy / flake8 / pylint 排除；本地补充文档目录 `fly-docs/` 若未同步排除，提交其中的示例 Python 文件就会触发该错误。
+
+处理方式：
+
+在 `.pre-commit-config.yaml` 中，把 `fly-docs` 与 `docs` 一样加入排除规则，例如：
+
+```yaml
+# mypy
+exclude:
+    (?x)(
+        pb2\.py$
+        | grpc\.py$
+        | ^docs
+        | ^fly-docs
+        | \.html$
+    )
+
+# flake8
+exclude: ^(docs|fly-docs)
+
+# pylint
+exclude:
+    (?x)(
+        ^docs
+        | ^fly-docs
+        | ...
+    )
+```
+
+修改后重新 stage 再提交：
+
+```bash
+git add .pre-commit-config.yaml
+git commit
+```
+
+经验：向仓库新增文档目录（尤其是带示例 `.py` 的目录）时，应同步检查 pre-commit 的 exclude 是否需要覆盖该目录，避免文档示例与正式包代码共用同一套类型检查规则。
+
 ## 7. 推荐排障顺序
 
 遇到安装问题时，按下面顺序检查：
