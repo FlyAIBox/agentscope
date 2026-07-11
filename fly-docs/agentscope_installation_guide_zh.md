@@ -341,6 +341,48 @@ git commit
 
 经验：向仓库新增文档目录（尤其是带示例 `.py` 的目录）时，应同步检查 pre-commit 的 exclude 是否需要覆盖该目录，避免文档示例与正式包代码共用同一套类型检查规则。
 
+### 6.5 `pnpm: command not found`
+
+在 `fly-docs/examples/web_ui` 下执行依赖安装时：
+
+```bash
+cd ~/code/agentscope/fly-docs/examples/web_ui
+pnpm install
+```
+
+可能出现：
+
+```text
+Command 'pnpm' not found, did you mean:
+  command 'npm' from deb npm (...)
+```
+
+原因是本机已有 Node.js / npm，但尚未安装或启用 `pnpm`。该示例使用 pnpm workspace，不能改用 `npm install` 替代。
+
+推荐用 Node.js 自带的 Corepack 启用 pnpm：
+
+```bash
+corepack enable
+corepack prepare pnpm@latest --activate
+pnpm --version
+```
+
+如果 `corepack` 不可用，也可以用 npm 全局安装：
+
+```bash
+npm install -g pnpm
+pnpm --version
+```
+
+确认 `pnpm --version` 可用后，再回到示例目录安装依赖：
+
+```bash
+cd ~/code/agentscope/fly-docs/examples/web_ui
+pnpm install
+```
+
+如果连 `node` / `npm` 都没有，需要先安装 Node.js（建议 20 及以上），再按上面步骤启用 pnpm。
+
 ## 7. 推荐排障顺序
 
 遇到安装问题时，按下面顺序检查：
