@@ -1168,7 +1168,83 @@ git remote set-url origin git@github.com:用户名/仓库名.git
 git remote -v
 ```
 
-### 4.10 删除 Git 用户信息和 SSH 密钥
+### 4.10 HTTPS `git pull` / `git push` 返回 403
+
+执行 `git pull` 或 `git push` 时，如远程地址为 HTTPS 且出现：
+
+```text
+fatal: unable to access 'https://github.com/FlyAIBox/agentscope.git/': The requested URL returned error: 403
+```
+
+表示 GitHub **拒绝了当前 HTTPS 认证**。常见原因：
+
+- Personal Access Token（PAT）已过期、被撤销或权限不足
+- macOS 钥匙串或 Git 凭据助手中缓存了错误的用户名/密码
+- 私有仓库未提供有效凭据，匿名访问会被拒绝
+
+#### 4.10.1 诊断
+
+先确认 SSH 密钥是否已配置且可用：
+
+```bash
+ssh -T git@github.com
+```
+
+认证成功时会看到：
+
+```text
+Hi FlyAIBox! You've successfully authenticated, but GitHub does not provide shell access.
+```
+
+查看当前远程地址：
+
+```bash
+cd 仓库目录
+git remote -v
+```
+
+如 `origin` 为 `https://github.com/...`，`pull`/`push` 走 HTTPS 认证；如为 `git@github.com:...`，则走 SSH 密钥认证。
+
+#### 4.10.2 推荐修复：将远程地址改为 SSH
+
+若 4.7 节 SSH 测试已通过，直接将 `origin` 从 HTTPS 改为 SSH，避免 PAT 和凭据缓存问题：
+
+```bash
+cd 仓库目录
+git remote set-url origin git@github.com:FlyAIBox/agentscope.git
+git remote -v
+git pull --tags origin fly-v2.0.4
+```
+
+改完后 `fetch`/`push` 均通过 SSH 密钥认证，不再依赖 HTTPS token。
+
+#### 4.10.3 备选：继续使用 HTTPS
+
+如必须使用 HTTPS，需在 GitHub 生成新的 Personal Access Token：
+
+1. 登录 GitHub → `Settings` → `Developer settings` → `Personal access tokens`
+2. 创建 token，至少勾选 `repo` 权限
+3. 在 Mac 上更新钥匙串中的 GitHub 凭据，或在终端执行 `git pull` 时用 token 作为密码
+
+清除 macOS 中旧的 GitHub HTTPS 凭据：
+
+```bash
+# 在 Mac 的「钥匙串访问」中搜索 github.com，删除过期的互联网密码条目
+```
+
+#### 4.10.4 Cursor / Mac 与 Ubuntu 远程环境分别处理
+
+403 可能出现在不同环境：
+
+| 环境 | 典型原因 | 处理 |
+| :--- | :--- | :--- |
+| Mac 本地 Cursor | Mac 钥匙串中 HTTPS 凭据过期 | 在 Mac 仓库中执行 `git remote set-url origin git@github.com:FlyAIBox/agentscope.git` |
+| Ubuntu SSH 远程 | 远程 `origin` 仍为 HTTPS 且未配置 token | 在 Ubuntu 中按 4.10.2 改为 SSH 地址 |
+| 两者同时存在 | Mac 和 Ubuntu 各自维护独立的 `origin` 和凭据 | 分别在对应环境中修改 `git remote` 并验证 |
+
+在 Ubuntu 远程开发时，Cursor 的 Git 操作在 Ubuntu 上执行，需确保 **Ubuntu 侧** 的 `origin` 和 SSH 密钥配置正确，而不是仅修改 Mac 本地仓库。
+
+### 4.11 删除 Git 用户信息和 SSH 密钥
 
 删除全局 Git 用户名和邮箱：
 
