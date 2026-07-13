@@ -2681,11 +2681,62 @@ sudo systemctl restart systemd-timesyncd
 timedatectl status
 ```
 
-#### 10.3.5 VMware Fusion 时间同步
+#### 10.3.5 安装 ntpdate 用于手动时间同步
+
+日常优先使用 `systemd-timesyncd` 自动同步；如需立即手动校时，可安装 `ntpdate`。
+
+**安装：**
+
+```bash
+sudo apt-get update
+sudo apt-get install -y ntpdate
+```
+
+如报 `Could not get lock /var/lib/dpkg/lock-frontend`，说明有其他 `apt` 进程正在运行。先查看占用锁的进程：
+
+```bash
+sudo fuser /var/lib/dpkg/lock-frontend
+ps aux | grep -E 'apt|dpkg'
+```
+
+等待该进程结束后再重试安装。时钟和 DNS 正常后，安装通常可一次成功。
+
+**验证安装：**
+
+```bash
+which ntpdate
+```
+
+输出应为 `/usr/sbin/ntpdate`。
+
+**手动同步时间：**
+
+`ntpdate` 不带参数时会报 `ntpdig: no eligible servers`，需指定 NTP 服务器：
+
+```bash
+sudo ntpdate -u ntp.aliyun.com
+date
+```
+
+成功时输出类似：
+
+```text
+2026-07-13 11:00:35.246184 (+0800) +0.055114 +/- 0.014658 ntp.aliyun.com 203.107.6.88 s2 no-leap
+```
+
+`-u` 表示使用非特权端口（123 以外），适合在 `systemd-timesyncd` 已占用 123 端口时手动校时。
+
+**使用建议：**
+
+- 平时保持 `timedatectl set-ntp true`，由 `systemd-timesyncd` 自动维护时钟
+- 仅在自动同步失效、或按 10.3.4 打破 DNSSEC 死循环后需要立即校时时，使用 `ntpdate` 手动同步
+- 手动同步完成后，可再次执行 `timedatectl status` 确认 `System clock synchronized: yes`
+
+#### 10.3.6 VMware Fusion 时间同步
 
 在 VMware Fusion 中打开该虚拟机设置，启用「将客户机时间与主机同步」。确保 Mac 主机时间正确后，Ubuntu 虚拟机时间会更稳定。
 
-#### 10.3.6 时区错误引发的连锁问题
+#### 10.3.7 时区错误引发的连锁问题
 
 时区或系统时间不正确时，可能出现：
 
