@@ -2581,7 +2581,122 @@ df -h
 
 > 不建议在未确认日志错误前直接删除整个 GNOME 用户配置目录或禁用 `vmwgfx` 内核模块，这些操作可能导致个人桌面设置丢失或完全无图形输出。
 
-### 10.3 性能优化建议
+### 10.3 系统时区与北京时间配置
+
+Ubuntu 安装时如未选择 `Asia/Shanghai`，或虚拟机时间漂移，会导致 `date` 显示非北京时间，进而影响 DNS 解析、APT 证书校验、Docker TLS 握手和日志时间。按以下步骤修复。
+
+#### 10.3.1 检查当前时区与时间
+
+```bash
+timedatectl status
+date
+ls -l /etc/localtime
+```
+
+- `Time zone` 应为 `Asia/Shanghai (CST, +0800)`
+- `CST` 即中国标准时间（北京时间，UTC+8），不是美国中部时间
+- 如时区正确但 `System clock synchronized: no`，说明时钟未同步，见 10.3.3
+
+#### 10.3.2 设置时区为北京时间
+
+```bash
+sudo timedatectl set-timezone Asia/Shanghai
+```
+
+验证：
+
+```bash
+timedatectl status
+date
+```
+
+#### 10.3.3 开启 NTP 时间同步
+
+```bash
+sudo timedatectl set-ntp true
+sudo systemctl restart systemd-timesyncd
+timedatectl status
+```
+
+期望 `System clock synchronized: yes`。如仍为 `no`，检查 NTP 服务日志：
+
+```bash
+journalctl -u systemd-timesyncd -n 20 --no-pager
+```
+
+#### 10.3.4 时钟错误导致 DNSSEC 校验失败（死循环）
+
+时区正确但时间偏差较大时，可能出现以下连锁故障：
+
+1. 系统时钟落后 → `systemd-resolved` 报 `DNSSEC validation failed: signature-expired`
+2. DNS 解析失败 → `systemd-timesyncd` 无法联系 NTP 服务器
+3. NTP 无法同步 → 时钟继续错误
+
+诊断命令：
+
+```bash
+timedatectl status
+resolvectl query ntp.aliyun.com
+journalctl -u systemd-timesyncd -n 10 --no-pager
+```
+
+如 `resolvectl query` 报 `signature-expired`，而 `dig +short ntp.aliyun.com @223.5.5.5` 能正常返回 IP，说明是 DNSSEC 与错误时钟的冲突。
+
+**修复步骤：**
+
+1. 临时关闭 DNSSEC，打破死循环：
+
+   ```bash
+   sudo sed -i 's/^DNSSEC=yes/DNSSEC=no/' /etc/systemd/resolved.conf
+   sudo systemctl restart systemd-resolved
+   resolvectl flush-caches
+   resolvectl query ntp.aliyun.com
+   ```
+
+2. 重启 NTP 并等待同步：
+
+   ```bash
+   sudo systemctl restart systemd-timesyncd
+   sleep 5
+   timedatectl status
+   ```
+
+   确认 `System clock synchronized: yes` 且 `Local time` 为正确的北京时间。
+
+3. 恢复 DNSSEC：
+
+   ```bash
+   sudo sed -i 's/^DNSSEC=no/DNSSEC=yes/' /etc/systemd/resolved.conf
+   sudo systemctl restart systemd-resolved
+   resolvectl query ntp.aliyun.com
+   ```
+
+   时钟正确后 DNSSEC 校验应恢复正常。
+
+如 NTP 仍无法同步，可手动设置近似时间后再重启 NTP：
+
+```bash
+sudo date -s "2026-07-13 10:00:00"
+sudo systemctl restart systemd-timesyncd
+timedatectl status
+```
+
+#### 10.3.5 VMware Fusion 时间同步
+
+在 VMware Fusion 中打开该虚拟机设置，启用「将客户机时间与主机同步」。确保 Mac 主机时间正确后，Ubuntu 虚拟机时间会更稳定。
+
+#### 10.3.6 时区错误引发的连锁问题
+
+时区或系统时间不正确时，可能出现：
+
+- `resolvectl query` 报 `DNSSEC validation failed: signature-expired`
+- `sudo apt update` 报 TLS 握手失败（见 6.8.1）
+- Docker 拉取镜像证书校验失败
+- 日志、定时任务时间与预期不符
+
+修复时区并同步时间后，重试原先失败的命令即可。
+
+### 10.4 性能优化建议
 
 1. 为虚拟机分配足够内存（至少4GB）
 
