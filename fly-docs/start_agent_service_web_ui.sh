@@ -66,37 +66,50 @@ managed_pid() {
     return 1
 }
 
-run_in_own_session() {
-    # Linux 通常有 util-linux 的 setsid；macOS 等环境用 Python 创建新会话。
-    if command -v setsid >/dev/null 2>&1; then
-        exec setsid "$@"
-    fi
-    exec python3 -c 'import os, sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' "$@"
-}
-
+# 以后台会话方式启动进程，并把真实 PID 写入 pidfile（兼容 Linux setsid / macOS）。
 start_process() {
     local name="$1" workdir="$2"
     shift 2
 
-    local pid
+    local pid logfile pidfile
+    logfile="$(log_file "${name}")"
+    pidfile="$(pid_file "${name}")"
+
     if pid="$(managed_pid "${name}")"; then
         info "${name} 已由脚本管理（PID ${pid}）"
         return 0
     fi
 
-    info "启动 ${name}，日志：$(log_file "${name}")"
-    (
-        cd "${workdir}"
-        # 函数内部会 exec；重定向由子 shell 继承给最终进程。
-        run_in_own_session "$@" >>"$(log_file "${name}")" 2>&1
-    ) &
-    pid=$!
-    printf '%s\n' "${pid}" >"$(pid_file "${name}")"
-    sleep 1
+    info "启动 ${name}，日志：${logfile}"
+    # 非交互环境避免 pnpm 因重建 node_modules 需要确认而失败
+    CI=true \
+    CONFIRM_MODULES_PURGE=false \
+    python3 - "${workdir}" "${logfile}" "${pidfile}" "$@" <<'PY'
+import os
+import sys
 
-    if ! kill -0 "${pid}" 2>/dev/null; then
-        tail -n 40 "$(log_file "${name}")" 2>/dev/null || true
-        rm -f "$(pid_file "${name}")"
+workdir, logfile, pidfile = sys.argv[1], sys.argv[2], sys.argv[3]
+cmd = sys.argv[4:]
+os.chdir(workdir)
+
+# 经典 daemonize：父进程写 PID 后退出，子进程新建会话并 exec
+child_pid = os.fork()
+if child_pid > 0:
+    with open(pidfile, "w", encoding="utf-8") as fh:
+        fh.write(str(child_pid))
+    raise SystemExit(0)
+
+os.setsid()
+with open(logfile, "a", encoding="utf-8") as log:
+    os.dup2(log.fileno(), 1)
+    os.dup2(log.fileno(), 2)
+os.execvp(cmd[0], cmd)
+PY
+
+    sleep 1
+    if ! pid="$(managed_pid "${name}")"; then
+        tail -n 40 "${logfile}" 2>/dev/null || true
+        rm -f "${pidfile}"
         fail "${name} 启动失败"
     fi
 }
@@ -108,7 +121,8 @@ stop_process() {
         return 0
     fi
 
-    info "停止 ${name}（进程组 ${pid}）"
+    info "停止 ${name}（PID ${pid}）"
+    # 优先杀进程组（setsid 后 PGID==PID）；失败则退回单 PID
     kill -TERM -- "-${pid}" 2>/dev/null || kill -TERM "${pid}" 2>/dev/null || true
     for ((i = 1; i <= 10; i++)); do
         kill -0 "${pid}" 2>/dev/null || break
@@ -119,6 +133,22 @@ stop_process() {
         kill -KILL -- "-${pid}" 2>/dev/null || kill -KILL "${pid}" 2>/dev/null || true
     fi
     rm -f "$(pid_file "${name}")"
+}
+
+# 清理占用示例端口、但不在脚本 pidfile 中的残留进程（常见于 PID 文件丢失后的 restart）
+reclaim_port() {
+    local port="$1" label="$2" pids
+    pids="$(lsof -nP -iTCP:"${port}" -sTCP:LISTEN -t 2>/dev/null || true)"
+    [[ -n "${pids}" ]] || return 0
+    warn "发现残留进程占用 ${label} 端口 ${port}，PID：${pids//$'\n'/ }"
+    # shellcheck disable=SC2086
+    kill -TERM ${pids} 2>/dev/null || true
+    sleep 1
+    pids="$(lsof -nP -iTCP:"${port}" -sTCP:LISTEN -t 2>/dev/null || true)"
+    if [[ -n "${pids}" ]]; then
+        # shellcheck disable=SC2086
+        kill -KILL ${pids} 2>/dev/null || true
+    fi
 }
 
 activate_venv() {
@@ -217,7 +247,10 @@ start_all() {
     if http_ok "http://127.0.0.1:${AGENT_PORT}/openapi.json"; then
         info "Agent Service 已在运行：http://127.0.0.1:${AGENT_PORT}"
     elif tcp_open "${AGENT_PORT}"; then
-        fail "端口 ${AGENT_PORT} 已被其他服务占用"
+        reclaim_port "${AGENT_PORT}" "Agent Service"
+        start_process agent-service "${AGENT_DIR}" \
+            "${VENV_DIR}/bin/python" main.py
+        wait_for_url agent-service "http://127.0.0.1:${AGENT_PORT}/openapi.json"
     else
         start_process agent-service "${AGENT_DIR}" \
             "${VENV_DIR}/bin/python" main.py
@@ -227,7 +260,10 @@ start_all() {
     if http_ok "http://127.0.0.1:${WEB_BACKEND_PORT}/api/health"; then
         info "Web UI Backend 已在运行：http://127.0.0.1:${WEB_BACKEND_PORT}"
     elif tcp_open "${WEB_BACKEND_PORT}"; then
-        fail "端口 ${WEB_BACKEND_PORT} 已被其他服务占用"
+        reclaim_port "${WEB_BACKEND_PORT}" "Web UI Backend"
+        start_process web-backend "${WEB_DIR}" \
+            pnpm --filter backend dev
+        wait_for_url web-backend "http://127.0.0.1:${WEB_BACKEND_PORT}/api/health"
     else
         start_process web-backend "${WEB_DIR}" \
             pnpm --filter backend dev
@@ -237,7 +273,10 @@ start_all() {
     if http_ok "http://127.0.0.1:${WEB_FRONTEND_PORT}/"; then
         info "Web UI Frontend 已在运行：http://127.0.0.1:${WEB_FRONTEND_PORT}"
     elif tcp_open "${WEB_FRONTEND_PORT}"; then
-        fail "端口 ${WEB_FRONTEND_PORT} 已被其他服务占用"
+        reclaim_port "${WEB_FRONTEND_PORT}" "Web UI Frontend"
+        start_process web-frontend "${WEB_DIR}" \
+            pnpm --filter frontend dev --host 0.0.0.0
+        wait_for_url web-frontend "http://127.0.0.1:${WEB_FRONTEND_PORT}/"
     else
         start_process web-frontend "${WEB_DIR}" \
             pnpm --filter frontend dev --host 0.0.0.0
@@ -256,7 +295,15 @@ stop_all() {
     stop_process web-frontend
     stop_process web-backend
     stop_process agent-service
-    info "Redis 默认保留运行，以免影响数据；如需停止请执行：docker stop ${REDIS_CONTAINER}"
+    # PID 文件丢失时，仍尝试清掉示例占用的应用端口
+    reclaim_port "${WEB_FRONTEND_PORT}" "Web UI Frontend"
+    reclaim_port "${WEB_BACKEND_PORT}" "Web UI Backend"
+    reclaim_port "${AGENT_PORT}" "Agent Service"
+    if command -v docker >/dev/null 2>&1; then
+        info "Redis 默认保留运行，以免影响数据；如需停止请执行：docker stop ${REDIS_CONTAINER}"
+    else
+        info "Redis 默认保留运行，以免影响数据；如需停止请执行：redis-cli shutdown"
+    fi
 }
 
 show_status() {

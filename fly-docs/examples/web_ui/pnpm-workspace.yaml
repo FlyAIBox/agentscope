@@ -1,13 +1,6 @@
 packages:
-  - frontend
-  - backend
+    - frontend
+    - backend
 
-allowBuilds:
-  msw: true
-  sharp: true
-  unrs-resolver: true
-
-onlyBuiltDependencies:
-  - msw
-  - sharp
-  - unrs-resolver
+ignoredBuiltDependencies:
+    - msw
