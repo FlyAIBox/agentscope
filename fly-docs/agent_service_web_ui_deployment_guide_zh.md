@@ -34,9 +34,11 @@ cd /root/code/agentscope
 
 # 查看最近日志
 ./fly-docs/start_agent_service_web_ui.sh logs
+./fly-docs/start_agent_service_web_ui.sh logs -n 50
 
-# 持续查看指定服务日志
-./fly-docs/start_agent_service_web_ui.sh logs agent-service
+# 持续查看指定服务日志（支持 -f / -n / --tail）
+./fly-docs/start_agent_service_web_ui.sh logs -f agent-service
+./fly-docs/start_agent_service_web_ui.sh logs --tail 200 -f web-frontend
 
 # 重启或停止脚本管理的应用进程
 ./fly-docs/start_agent_service_web_ui.sh restart
@@ -79,6 +81,13 @@ docker --version
 ```bash
 corepack enable
 corepack prepare pnpm@11.12.0 --activate
+pnpm --version
+```
+
+若出现 `command not found: corepack`（常见于 Homebrew 安装的 Node，其配方通常不附带 Corepack），改用 npm 全局安装同一版本：
+
+```bash
+npm install -g pnpm@11.12.0
 pnpm --version
 ```
 
@@ -173,6 +182,40 @@ docker exec agentscope-redis redis-cli ping
 ```bash
 docker start agentscope-redis
 ```
+
+macOS 若没有 Docker，可用 Homebrew 安装本机 Redis：
+
+```bash
+brew install redis
+```
+
+一次性后台启动（与启动脚本在无 Docker 时的行为一致）：
+
+```bash
+mkdir -p /tmp/agentscope-example-$UID/redis-data \
+  /tmp/agentscope-example-$UID/logs
+redis-server \
+  --daemonize yes \
+  --port 6379 \
+  --dir /tmp/agentscope-example-$UID/redis-data \
+  --appendonly yes \
+  --pidfile /tmp/agentscope-example-$UID/redis.pid \
+  --logfile /tmp/agentscope-example-$UID/logs/redis.log
+```
+
+也可以交给 brew 托管（开机可自启）：
+
+```bash
+brew services start redis
+```
+
+检查本机 Redis：
+
+```bash
+redis-cli ping
+```
+
+预期输出同样为 `PONG`。使用 `./fly-docs/start_agent_service_web_ui.sh start` 时，若未检测到 Docker 但本机有 `redis-server`，脚本会自动按上述方式启动 Redis。
 
 ### 5.2 启动 Agent Service
 
@@ -431,7 +474,7 @@ ss -ltnp | grep -E ':(3000|5173|6379|8000)'
 
 ### 9.6 pnpm 安装或构建异常
 
-确认 Node.js 版本不低于 20，并使用锁文件声明的 pnpm：
+确认 Node.js 版本不低于 20，并使用锁文件声明的 pnpm（`packageManager` 为 `pnpm@11.12.0`）：
 
 ```bash
 node --version
@@ -441,6 +484,8 @@ pnpm --version
 pnpm install --frozen-lockfile
 pnpm build
 ```
+
+若本机没有 `corepack`，先执行 `npm install -g pnpm@11.12.0`，再继续 `pnpm install` / `pnpm build`。
 
 ## 10. 上线检查清单
 

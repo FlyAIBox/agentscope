@@ -66,6 +66,14 @@ managed_pid() {
     return 1
 }
 
+run_in_own_session() {
+    # Linux 通常有 util-linux 的 setsid；macOS 等环境用 Python 创建新会话。
+    if command -v setsid >/dev/null 2>&1; then
+        exec setsid "$@"
+    fi
+    exec python3 -c 'import os, sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' "$@"
+}
+
 start_process() {
     local name="$1" workdir="$2"
     shift 2
@@ -79,7 +87,8 @@ start_process() {
     info "启动 ${name}，日志：$(log_file "${name}")"
     (
         cd "${workdir}"
-        exec setsid "$@" >>"$(log_file "${name}")" 2>&1
+        # 函数内部会 exec；重定向由子 shell 继承给最终进程。
+        run_in_own_session "$@" >>"$(log_file "${name}")" 2>&1
     ) &
     pid=$!
     printf '%s\n' "${pid}" >"$(pid_file "${name}")"
@@ -143,7 +152,7 @@ install_all() {
 
 check_runtime_dependencies() {
     require_command curl
-    require_command setsid
+    require_command python3
     require_command node
     require_command pnpm
     activate_venv
@@ -165,18 +174,32 @@ start_redis() {
         return 0
     fi
 
-    require_command docker
-    if docker container inspect "${REDIS_CONTAINER}" >/dev/null 2>&1; then
-        info "启动已有 Redis 容器：${REDIS_CONTAINER}"
-        docker start "${REDIS_CONTAINER}" >/dev/null
+    if command -v docker >/dev/null 2>&1; then
+        if docker container inspect "${REDIS_CONTAINER}" >/dev/null 2>&1; then
+            info "启动已有 Redis 容器：${REDIS_CONTAINER}"
+            docker start "${REDIS_CONTAINER}" >/dev/null
+        else
+            info "创建 Redis 容器：${REDIS_CONTAINER}"
+            docker run -d \
+                --name "${REDIS_CONTAINER}" \
+                --restart unless-stopped \
+                -p "${REDIS_PORT}:6379" \
+                -v agentscope-redis-data:/data \
+                redis:7-alpine redis-server --appendonly yes >/dev/null
+        fi
+    elif command -v redis-server >/dev/null 2>&1; then
+        local redis_data="${RUN_DIR}/redis-data"
+        mkdir -p "${redis_data}"
+        info "Docker 不可用，使用本机 redis-server（数据目录：${redis_data}）"
+        redis-server \
+            --daemonize yes \
+            --port "${REDIS_PORT}" \
+            --dir "${redis_data}" \
+            --appendonly yes \
+            --pidfile "${RUN_DIR}/redis.pid" \
+            --logfile "${LOG_DIR}/redis.log"
     else
-        info "创建 Redis 容器：${REDIS_CONTAINER}"
-        docker run -d \
-            --name "${REDIS_CONTAINER}" \
-            --restart unless-stopped \
-            -p "${REDIS_PORT}:6379" \
-            -v agentscope-redis-data:/data \
-            redis:7-alpine redis-server --appendonly yes >/dev/null
+        fail "未检测到可用 Redis。请安装 Docker，或安装本机 Redis（macOS: brew install redis）后重试"
     fi
 
     local i
@@ -266,21 +289,83 @@ show_status() {
 }
 
 show_logs() {
-    local name="${1:-}"
-    if [[ -n "${name}" ]]; then
-        case "${name}" in
-            agent-service|web-backend|web-frontend) ;;
-            *) fail "未知服务：${name}" ;;
+    local name=""
+    local follow=0
+    local has_n=0
+    local -a tail_opts=()
+    local svc
+    local -a files=()
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            agent-service|web-backend|web-frontend)
+                [[ -z "${name}" ]] || fail "只能指定一个服务名"
+                name="$1"
+                shift
+                ;;
+            -f|--follow)
+                follow=1
+                tail_opts+=("-f")
+                shift
+                ;;
+            -n|--lines|--tail)
+                [[ $# -ge 2 ]] || fail "$1 需要行数参数"
+                has_n=1
+                tail_opts+=("-n" "$2")
+                shift 2
+                ;;
+            -n*)
+                has_n=1
+                tail_opts+=("-n" "${1#-n}")
+                shift
+                ;;
+            --tail=*)
+                has_n=1
+                tail_opts+=("-n" "${1#--tail=}")
+                shift
+                ;;
+            --lines=*)
+                has_n=1
+                tail_opts+=("-n" "${1#--lines=}")
+                shift
+                ;;
+            -h|--help)
+                usage
+                return 0
+                ;;
+            *)
+                fail "未知参数：$1（可用：-f/--follow、-n N / --tail N、服务名）"
+                ;;
         esac
-        touch "$(log_file "${name}")"
-        tail -n 100 -f "$(log_file "${name}")"
-    else
-        info "日志目录：${LOG_DIR}"
-        for name in agent-service web-backend web-frontend; do
-            printf '\n===== %s =====\n' "${name}"
-            tail -n 30 "$(log_file "${name}")" 2>/dev/null || true
-        done
+    done
+
+    if [[ "${has_n}" -eq 0 ]]; then
+        if [[ -n "${name}" ]]; then
+            tail_opts=("-n" "100" "${tail_opts[@]}")
+        else
+            tail_opts=("-n" "30" "${tail_opts[@]}")
+        fi
     fi
+
+    if [[ -n "${name}" ]]; then
+        touch "$(log_file "${name}")"
+        exec tail "${tail_opts[@]}" "$(log_file "${name}")"
+    fi
+
+    info "日志目录：${LOG_DIR}"
+    for svc in agent-service web-backend web-frontend; do
+        touch "$(log_file "${svc}")"
+        files+=("$(log_file "${svc}")")
+    done
+
+    if [[ "${follow}" -eq 1 ]]; then
+        exec tail "${tail_opts[@]}" "${files[@]}"
+    fi
+
+    for svc in agent-service web-backend web-frontend; do
+        printf '\n===== %s =====\n' "${svc}"
+        tail "${tail_opts[@]}" "$(log_file "${svc}")" 2>/dev/null || true
+    done
 }
 
 usage() {
@@ -293,12 +378,19 @@ usage() {
   stop                 停止由本脚本启动的应用进程（保留 Redis）
   restart              重启由本脚本管理的应用进程
   status               检查全部服务状态
-  logs [服务名]        查看日志；服务名可为 agent-service、web-backend、web-frontend
+  logs [选项] [服务名] 查看日志；选项同 tail：-f/--follow、-n N / --tail N
+                       服务名可为 agent-service、web-backend、web-frontend
   help                 显示帮助
 
 首次使用：
   $(basename "$0") install
   $(basename "$0") start
+
+日志示例：
+  $(basename "$0") logs
+  $(basename "$0") logs -n 50
+  $(basename "$0") logs -f agent-service
+  $(basename "$0") logs --tail 200 -f web-frontend
 EOF
 }
 
@@ -308,7 +400,7 @@ case "${1:-start}" in
     stop) stop_all ;;
     restart) stop_all; start_all ;;
     status) show_status ;;
-    logs) show_logs "${2:-}" ;;
+    logs) shift; show_logs "$@" ;;
     help|-h|--help) usage ;;
     *) usage; fail "未知命令：$1" ;;
 esac
