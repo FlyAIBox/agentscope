@@ -1,6 +1,18 @@
 packages:
-    - frontend
-    - backend
+  - frontend
+  - backend
 
-ignoredBuiltDependencies:
-    - msw
+# pnpm 11：非 TTY / 后台启动时允许直接重建 node_modules，无需交互确认
+confirmModulesPurge: false
+
+# pnpm 11 默认 verifyDepsBeforeRun=install：每次 pnpm run 都会校验并可能重装。
+# 后台无 TTY 时会触发 ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY，并清掉半成品 node_modules。
+# 依赖安装交给 start 脚本的 install 命令，运行期不再自动重装。
+verifyDepsBeforeRun: false
+
+# pnpm 11 默认 strictDepBuilds=true，必须显式批准/拒绝带 postinstall 的依赖
+# msw：仅开发 mock，无需构建脚本；sharp / unrs-resolver：需要原生二进制
+allowBuilds:
+  msw: false
+  sharp: true
+  unrs-resolver: true

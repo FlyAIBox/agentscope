@@ -164,3 +164,8 @@ pnpm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 lerna-debug.log*
+
+# Agent Service example runtime artifacts
+fly-docs/examples/agent_service/.playwright-mcp/
+fly-docs/examples/agent_service/blobs/
+fly-docs/examples/agent_service/workspaces/

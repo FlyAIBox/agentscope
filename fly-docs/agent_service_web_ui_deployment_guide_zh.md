@@ -12,7 +12,7 @@ source .venv/bin/activate
 uv pip install -e .
 ```
 
-文档中的命令已于 2026-07-12 在 Linux ARM64、Python 3.11.15、uv 0.11.28、Node.js 22.14.0、pnpm 11.12.0 环境中实际执行验证；macOS（Homebrew Node / 本机 Redis、无 Docker、无 Corepack）场景亦按本文补充步骤验证过启动脚本。
+文档中的命令已于 2026-07-12 在 Linux ARM64、Python 3.11.15、uv 0.11.28、Node.js 22.14.0、pnpm 11.12.0 环境中实际执行验证；2026-07-14 在 macOS（Homebrew Node v25 / 本机 Redis、无 Docker、pnpm 11.12.0）上补充验证了 pnpm 11 的 `allowBuilds` / `verifyDepsBeforeRun` 相关修复与启动脚本。
 
 ## 快速启动脚本
 
@@ -50,7 +50,7 @@ cd /root/code/agentscope
 - 复用端口上已经健康运行的服务。
 - 无 Docker 但本机有 `redis-server` 时，自动以后台方式启动本机 Redis。
 - 不依赖 Linux 专用的 `setsid`；macOS 等环境用 Python 创建独立会话并记录真实 PID。
-- 后台启动 `pnpm` 时设置 `CI=true`，并在 `fly-docs/examples/web_ui/.npmrc` 中关闭 `confirm-modules-purge`，避免非 TTY 下重建 `node_modules` 失败。
+- 后台启动 `pnpm` 时设置 `CI=true` 与 `npm_config_verify_deps_before_run=false`；`pnpm-workspace.yaml` 中关闭 `verifyDepsBeforeRun` 与 `confirmModulesPurge`，避免 pnpm 11 在无 TTY 下校验依赖时清掉 `node_modules`。
 - `stop` / `restart` 会停止脚本记录的应用进程；若 PID 文件丢失，仍会尝试回收 8000 / 3000 / 5173 上的残留监听进程。默认不停止 Redis。
 
 ## 1. 服务结构与端口
@@ -139,14 +139,40 @@ PY
 
 ## 4. 安装 Web UI 依赖
 
-该目录是 pnpm workspace，包含 `frontend` 和 `backend` 两个包：
+该目录是 pnpm workspace，包含 `frontend` 和 `backend` 两个包。pnpm 11 对依赖构建脚本与运行前校验更严格，仓库已在 `fly-docs/examples/web_ui/pnpm-workspace.yaml` 预置：
+
+```yaml
+packages:
+  - frontend
+  - backend
+
+confirmModulesPurge: false
+verifyDepsBeforeRun: false
+
+allowBuilds:
+  msw: false
+  sharp: true
+  unrs-resolver: true
+```
+
+含义简要说明：
+
+| 配置 | 作用 |
+| --- | --- |
+| `allowBuilds` | 批准/拒绝带 postinstall 的依赖；值为 `true`/`false`，不能是 `set this to true or false` 占位符 |
+| `confirmModulesPurge: false` | 无 TTY 时允许静默重建 `node_modules`，避免 `ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY` |
+| `verifyDepsBeforeRun: false` | 关闭 `pnpm run` 前的自动重装，避免后台 `start` 清掉半成品依赖 |
+
+安装命令（推荐带 `CI=true`，与启动脚本 `install` 行为一致）：
 
 ```bash
 cd /root/code/agentscope/fly-docs/examples/web_ui
-pnpm install --frozen-lockfile
+CI=true pnpm install --frozen-lockfile
 ```
 
 如果正在主动更新依赖锁文件，可改用 `pnpm install`；普通安装和 CI/部署建议保留 `--frozen-lockfile`，避免依赖版本漂移。
+
+安装日志里若出现 `husky: .git can't be found`，可忽略：示例位于仓库子目录，不影响 Web UI 运行。
 
 验证前后端均能完成生产构建：
 
@@ -525,27 +551,50 @@ lsof -nP -iTCP:3000,5173,6379,8000 -sTCP:LISTEN
 
 示例的 Agent Service 已配置宽松 CORS，适合本地体验。正式上线应把 `allow_origins=["*"]` 收紧为实际 Web UI 域名。
 
-### 9.6 pnpm 安装或构建异常
+### 9.6 pnpm 安装失败：`ERR_PNPM_IGNORED_BUILDS`
 
-确认 Node.js 版本不低于 20，并使用锁文件声明的 pnpm（`packageManager` 为 `pnpm@11.12.0`）：
+典型输出：
 
-```bash
-node --version
-corepack enable
-corepack install
-pnpm --version
-pnpm install --frozen-lockfile
-pnpm build
+```text
+[ERR_PNPM_IGNORED_BUILDS] Ignored build scripts: msw@2.14.6, sharp@0.34.5, unrs-resolver@1.11.1
+Run "pnpm approve-builds" to pick which dependencies should be allowed to run scripts.
 ```
 
-若本机没有 `corepack`，先执行 `npm install -g pnpm@11.12.0`，再继续 `pnpm install` / `pnpm build`。
+**原因：** pnpm 11 默认 `strictDepBuilds=true`。首次安装若发现带 postinstall 的包，会把占位符写进 `pnpm-workspace.yaml`：
 
-后台启动或 `restart` 时若出现 `ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY` / `Exit status 143`，见 [9.8](#98-restart-后-web-ui-失败exit-status-143--err_pnpm_aborted_remove_modules_dir_no_tty)。非交互重装可显式加 `CI=true`：
+```yaml
+allowBuilds:
+  msw: set this to true or false
+  sharp: set this to true or false
+  unrs-resolver: set this to true or false
+```
+
+占位符未改成布尔值时，安装以非零退出码失败（Python 侧可能已装完，但 Web UI 依赖未就绪）。
+
+**处理：**
+
+1. 确认 `fly-docs/examples/web_ui/pnpm-workspace.yaml` 中 `allowBuilds` 已为明确的 `true`/`false`（见 [第 4 节](#4-安装-web-ui-依赖)）。
+2. 重装：
 
 ```bash
 cd fly-docs/examples/web_ui
 CI=true pnpm install --frozen-lockfile
 ```
+
+也可交互执行 `pnpm approve-builds`，手动勾选需要允许构建的包。
+
+其他安装/构建检查：
+
+```bash
+node --version   # 建议 ≥ 20
+pnpm --version   # 锁文件声明为 pnpm@11.12.0
+CI=true pnpm install --frozen-lockfile
+pnpm build
+```
+
+若本机没有 `corepack`（常见于 Homebrew Node），先执行 `npm install -g pnpm@11.12.0`。
+
+后台启动或 `restart` 时若出现 `ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY` / `Exit status 143` / `Cannot find module …/nodemon.js`，见 [9.8](#98-start--restart-后-web-ui-失败exit-status-143--nodemon-missing)。
 
 ### 9.7 `command not found: setsid`（macOS）
 
@@ -555,43 +604,57 @@ CI=true pnpm install --frozen-lockfile
 ./fly-docs/start_agent_service_web_ui.sh start
 ```
 
-### 9.8 `restart` 后 Web UI 失败：`Exit status 143` / `ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY`
+### 9.8 `start` / `restart` 后 Web UI 失败：`Exit status 143` / nodemon missing
 
-典型日志片段：
+典型日志片段（常连续出现）：
 
 ```text
 Server running on http://localhost:3000
 [ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL] backend@1.0.0 dev: ...
 Exit status 143
 [ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY] Aborted removal of modules directory due to no TTY
+[WARN]  Local package.json exists, but node_modules missing, did you mean to install?
+Error: Cannot find module '.../backend/node_modules/nodemon/bin/nodemon.js'
+[ERROR] web-backend 启动失败
 ```
 
-含义：
+**原因链（pnpm 11 + 后台无 TTY）：**
 
-1. `Exit status 143` = 进程收到 `SIGTERM`（128 + 15），常见于 PID 文件丢失后旧进程与新进程冲突，或重启时被脚本回收端口误伤竞态。
-2. `ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY` = 后台无 TTY 时 pnpm 想重建 `node_modules` 需要交互确认，被中止。
+1. pnpm 11 默认 `verifyDepsBeforeRun=install`：每次 `pnpm --filter … dev` 都会先校验 `node_modules`，判定不一致时触发嵌套 `pnpm install`。
+2. 嵌套安装试图删除并重建 `node_modules`；后台进程无 TTY，若未关闭确认，则报 `ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY`。
+3. 半成品清理后依赖目录损坏 → `WARN: node_modules missing` → `Cannot find module …/nodemon.js`，backend/frontend 启动失败。
+4. `Exit status 143`（`SIGTERM`）也可能来自端口回收竞态或旧进程冲突；与上面叠加时更易误判为“偶发杀掉”。
 
-处理步骤：
+**注意：** pnpm 读取的是 `npm_config_confirm_modules_purge` / `npm_config_verify_deps_before_run`，不是 `PNPM_CONFIG_*` 或裸的 `CONFIRM_MODULES_PURGE`。启动脚本已改用正确前缀。
+
+**处理步骤：**
 
 ```bash
 # 1. 停掉脚本管理的进程，并回收残留端口
-cd /root/code/agentscope
+cd /path/to/agentscope
 ./fly-docs/start_agent_service_web_ui.sh stop
 
-# 2. 在非交互环境下重装 Web UI 依赖
-cd fly-docs/examples/web_ui
-CI=true pnpm install --frozen-lockfile
+# 2. 确认 pnpm-workspace.yaml 已含（见第 4 节）：
+#    verifyDepsBeforeRun: false
+#    confirmModulesPurge: false
+#    allowBuilds: { msw: false, sharp: true, unrs-resolver: true }
 
-# 3. 重新启动并检查状态
-cd /root/code/agentscope
+# 3. 删掉损坏依赖后重装
+cd fly-docs/examples/web_ui
+rm -rf node_modules frontend/node_modules backend/node_modules
+CI=true pnpm install --frozen-lockfile
+test -f backend/node_modules/nodemon/bin/nodemon.js && echo nodemon OK
+
+# 4. 重新启动并检查状态
+cd /path/to/agentscope
 ./fly-docs/start_agent_service_web_ui.sh start
 ./fly-docs/start_agent_service_web_ui.sh status
 ```
 
 仓库已做的防护：
 
-- `fly-docs/examples/web_ui/.npmrc` 含 `confirm-modules-purge=false`
-- 启动脚本后台拉起 `pnpm` 时带 `CI=true`
+- `pnpm-workspace.yaml`：`verifyDepsBeforeRun: false`、`confirmModulesPurge: false`、完整 `allowBuilds`
+- `start_agent_service_web_ui.sh`：`install` 使用 `CI=true pnpm install`；后台拉起 `pnpm` 时带 `CI=true`、`npm_config_verify_deps_before_run=false`、`npm_config_confirm_modules_purge=false`
 - `stop` / `restart` 在 PID 文件丢失时仍尝试回收应用端口
 
 若 `status` 中 Backend / Frontend 仍为 `[DOWN]`，查看日志定位：
@@ -600,6 +663,47 @@ cd /root/code/agentscope
 ./fly-docs/start_agent_service_web_ui.sh logs -n 80 web-backend
 ./fly-docs/start_agent_service_web_ui.sh logs -n 80 web-frontend
 ```
+
+### 9.9 Chat 无响应但 DeepSeek curl 正常：缺少 `socksio`
+
+如果页面发送消息后一直无响应，而直接 curl DeepSeek API 能正常返回，先看 Agent Service 日志：
+
+```bash
+./fly-docs/start_agent_service_web_ui.sh logs -n 120 agent-service
+```
+
+若看到类似错误：
+
+```text
+Using SOCKS proxy, but the 'socksio' package is not installed.
+Make sure to install httpx using `pip install httpx[socks]`.
+```
+
+说明当前 shell 或系统环境中存在 SOCKS 代理变量（例如 `SOCKS_PROXY` / `SOCKS5_PROXY` / `all_proxy=socks5://...`），`openai` SDK 底层的 `httpx` 会尝试走 SOCKS 代理，但 Python 环境缺少 `socksio`。
+
+处理方式：
+
+```bash
+cd /path/to/agentscope
+uv pip install --python .venv/bin/python "httpx[socks]"
+./fly-docs/start_agent_service_web_ui.sh restart
+```
+
+仓库依赖已改为 `httpx[socks]`，重新运行安装脚本也会补齐：
+
+```bash
+./fly-docs/start_agent_service_web_ui.sh install
+./fly-docs/start_agent_service_web_ui.sh restart
+```
+
+若不希望 Agent Service 走代理，也可以在启动前清理代理变量：
+
+```bash
+unset SOCKS_PROXY SOCKS5_PROXY socks_proxy socks5_proxy ALL_PROXY all_proxy
+./fly-docs/start_agent_service_web_ui.sh restart
+```
+
+另外，若前端日志出现 `Credential '...' not found`，说明当前 Agent 或会话引用了已删除的 credential。重新选择现有 credential 创建会话，或删除旧 Agent 后重新创建。
 
 ## 10. 上线检查清单
 

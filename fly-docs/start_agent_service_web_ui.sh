@@ -81,9 +81,11 @@ start_process() {
     fi
 
     info "启动 ${name}，日志：${logfile}"
-    # 非交互环境避免 pnpm 因重建 node_modules 需要确认而失败
+    # 非交互环境：避免 pnpm 11 verifyDepsBeforeRun/install 在无 TTY 下清掉 node_modules
+    # pnpm 读取 npm_config_*（不是 PNPM_CONFIG_* / CONFIRM_MODULES_PURGE）
     CI=true \
-    CONFIRM_MODULES_PURGE=false \
+    npm_config_confirm_modules_purge=false \
+    npm_config_verify_deps_before_run=false \
     python3 - "${workdir}" "${logfile}" "${pidfile}" "$@" <<'PY'
 import os
 import sys
@@ -176,7 +178,8 @@ install_all() {
 
     info "安装 Web UI 依赖"
     cd "${WEB_DIR}"
-    pnpm install --frozen-lockfile
+    # CI=true：非交互环境跳过 modules purge 确认；allowBuilds 已在 pnpm-workspace.yaml 写死
+    CI=true pnpm install --frozen-lockfile
     info "安装完成"
 }
 
