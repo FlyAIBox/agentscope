@@ -1,8 +1,8 @@
 import { Eye, EyeOff, Plus, Pencil, Trash2 } from 'lucide-react';
 import { useState, useEffect, useCallback } from 'react';
 
-import { credentialApi, modelApi, ttsModelApi } from '@/api';
-import type { CredentialRecord, CredentialSchema, ModelCard, TTSModelCard } from '@/api';
+import { credentialApi, modelApi } from '@/api';
+import type { CredentialRecord, CredentialSchema, ModelCard } from '@/api';
 import { InputTypeBadges } from '@/components/badge/InputTypeBadges';
 import { CreateCredentialDialog } from '@/components/dialog/CreateCredentialDialog';
 import { DeleteDialog } from '@/components/dialog/DeleteDialog';
@@ -103,52 +103,6 @@ function ModelCardItem({ model }: { model: ModelCard }) {
 	);
 }
 
-// ─── TTS Model Card ──────────────────────────────────────────────────────────
-
-function TTSModelCardItem({ model }: { model: TTSModelCard }) {
-	const { t } = useTranslation();
-
-	const statusVariant =
-		model.status === 'active'
-			? 'default'
-			: model.status === 'deprecated'
-				? 'secondary'
-				: 'outline';
-
-	return (
-		<Card className="shadow">
-			<CardHeader>
-				<CardTitle
-					className="text-sm font-semibold leading-tight truncate"
-					title={model.name}
-				>
-					{model.label || model.name}
-				</CardTitle>
-				{model.realtime && (
-					<CardAction>
-						<Badge variant="outline">Realtime</Badge>
-					</CardAction>
-				)}
-			</CardHeader>
-			<CardContent className="flex flex-col">
-				{model.status !== 'active' && (
-					<Badge variant={statusVariant} className="text-xs">
-						{model.status}
-					</Badge>
-				)}
-				<div className="flex justify-between items-center text-[14px]">
-					<span className="text-muted-foreground">{t('credential.inputTypes')}</span>
-					<InputTypeBadges inputTypes={model.input_types} />
-				</div>
-				<div className="flex justify-between items-center text-[14px]">
-					<span className="text-muted-foreground">{t('credential.outputTypes')}</span>
-					<InputTypeBadges inputTypes={model.output_types} />
-				</div>
-			</CardContent>
-		</Card>
-	);
-}
-
 // ─── Detail panel ─────────────────────────────────────────────────────────────
 
 interface DetailPanelProps {
@@ -161,7 +115,6 @@ interface DetailPanelProps {
 function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps) {
 	const { t } = useTranslation();
 	const [models, setModels] = useState<ModelCard[]>([]);
-	const [ttsModels, setTtsModels] = useState<TTSModelCard[]>([]);
 	const [modelsLoading, setModelsLoading] = useState(false);
 
 	const type = credential.data.type as string | undefined;
@@ -169,27 +122,17 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 	useEffect(() => {
 		if (!type) return;
 		setModelsLoading(true);
-		Promise.all([
-			modelApi
-				.listFromCredential(credential.data)
-				.then((res) => res.models)
-				.catch(() =>
-					modelApi
-						.list(type)
-						.then((res) => res.models)
-						.catch(() => [] as ModelCard[]),
-				),
-			ttsModelApi
-				.list(type)
-				.then((res) => res.models)
-				.catch(() => [] as TTSModelCard[]),
-		])
-			.then(([chatModels, tts]) => {
-				setModels(chatModels);
-				setTtsModels(tts);
-			})
+		modelApi
+			.listFromCredential(credential.data)
+			.then((res) => setModels(res.models))
+			.catch(() =>
+				modelApi
+					.list(type)
+					.then((res) => setModels(res.models))
+					.catch(() => setModels([])),
+			)
 			.finally(() => setModelsLoading(false));
-	}, [credential.id, type]);
+	}, [credential.data, credential.id, type]);
 
 	// Fields to display: use schema properties order, skip id/type/const fields
 	const displayFields = schema
@@ -285,22 +228,6 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 				)}
 			</div>
 
-			{/* Available TTS Models */}
-			{ttsModels.length > 0 && (
-				<>
-					<Separator />
-					<div className="flex flex-col gap-y-4">
-						<h3 className="text-sm font-semibold">
-							{t('credential.availableTTSModels')}({ttsModels.length})
-						</h3>
-						<div className="grid grid-cols-2 xl:grid-cols-3 gap-3">
-							{ttsModels.map((m) => (
-								<TTSModelCardItem key={m.name} model={m} />
-							))}
-						</div>
-					</div>
-				</>
-			)}
 		</div>
 	);
 }
