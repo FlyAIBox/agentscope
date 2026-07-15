@@ -1,5 +1,7 @@
 # Agent Service
 
+> [中文](README.zh-CN.md)
+
 Agent service is a FastAPI-based, multi-tenant and multi-session service built with AgentScope 2.0.
 
 This example demonstrates
