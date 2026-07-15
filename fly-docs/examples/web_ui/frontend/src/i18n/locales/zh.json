@@ -179,11 +179,17 @@
 		"title": "添加凭证",
 		"description": "为模型提供商添加凭证。",
 		"selectType": "提供商",
-		"selectTypePlaceholder": "选择提供商"
+		"selectTypePlaceholder": "选择提供商",
+		"test": "测试连接",
+		"testing": "测试中…",
+		"testFailed": "凭证测试失败。"
 	},
 	"dialog-credential-edit": {
 		"title": "编辑凭证",
-		"description": "更新该提供商已保存的凭证。"
+		"description": "更新该提供商已保存的凭证。",
+		"test": "测试连接",
+		"testing": "测试中…",
+		"testFailed": "凭证测试失败。"
 	},
 	"dialog-knowledge-base-create": {
 		"title": "创建知识库",

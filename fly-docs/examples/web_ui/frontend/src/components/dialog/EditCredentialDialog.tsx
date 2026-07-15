@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { credentialApi } from '@/api';
 import type { CredentialRecord, CredentialSchema } from '@/api';
 import { SchemaForm, type SchemaFormValue } from '@/components/form/SchemaForm';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import {
 	Dialog,
@@ -30,6 +31,11 @@ export function EditCredentialDialog({ open, onOpenChange, credential, onUpdated
 	const [loadingSchema, setLoadingSchema] = useState(false);
 	const [values, setValues] = useState<Record<string, SchemaFormValue>>({});
 	const [submitting, setSubmitting] = useState(false);
+	const [testing, setTesting] = useState(false);
+	const [testResult, setTestResult] = useState<{
+		type: 'success' | 'error';
+		message: string;
+	} | null>(null);
 
 	const type = credential.data.type as string | undefined;
 
@@ -43,6 +49,7 @@ export function EditCredentialDialog({ open, onOpenChange, credential, onUpdated
 					(s) => (s.properties.type?.const as string) === type,
 				);
 				setSchema(matched ?? null);
+				setTestResult(null);
 				// Pre-fill values from existing credential data (excluding writeOnly fields)
 				if (matched) {
 					const prefill: Record<string, SchemaFormValue> = {};
@@ -60,16 +67,40 @@ export function EditCredentialDialog({ open, onOpenChange, credential, onUpdated
 			.finally(() => setLoadingSchema(false));
 	}, [open, type, credential.data]);
 
-	const handleSubmit = async () => {
+	const buildData = () => {
 		if (!schema) return;
+		const data: Record<string, unknown> = { ...credential.data };
+		for (const [key, prop] of Object.entries(schema.properties)) {
+			if (key === 'id' || key === 'type' || prop.const !== undefined) continue;
+			const val = values[key];
+			if (val !== undefined && val !== '') data[key] = val;
+		}
+		return data;
+	};
+
+	const handleTest = async () => {
+		const data = buildData();
+		if (!data) return;
+		setTesting(true);
+		setTestResult(null);
+		try {
+			const res = await credentialApi.test({ data });
+			setTestResult({ type: 'success', message: res.message });
+		} catch (e) {
+			setTestResult({
+				type: 'error',
+				message: e instanceof Error ? e.message : t('dialog-credential-edit.testFailed'),
+			});
+		} finally {
+			setTesting(false);
+		}
+	};
+
+	const handleSubmit = async () => {
+		const data = buildData();
+		if (!data) return;
 		setSubmitting(true);
 		try {
-			const data: Record<string, unknown> = { ...credential.data };
-			for (const [key, prop] of Object.entries(schema.properties)) {
-				if (key === 'id' || key === 'type' || prop.const !== undefined) continue;
-				const val = values[key];
-				if (val !== undefined && val !== '') data[key] = val;
-			}
 			await update(credential.id, { data });
 			onOpenChange(false);
 			onUpdated?.();
@@ -91,19 +122,37 @@ export function EditCredentialDialog({ open, onOpenChange, credential, onUpdated
 					<SchemaForm
 						schema={schema}
 						values={values}
-						onChange={(key, val) => setValues((prev) => ({ ...prev, [key]: val }))}
+						onChange={(key, val) => {
+							setValues((prev) => ({ ...prev, [key]: val }));
+							setTestResult(null);
+						}}
 					/>
 				) : null}
+				{testResult && (
+					<Alert variant={testResult.type === 'error' ? 'destructive' : 'default'}>
+						<AlertDescription>{testResult.message}</AlertDescription>
+					</Alert>
+				)}
 				<DialogFooter>
+					<Button
+						variant="outline"
+						onClick={handleTest}
+						disabled={testing || submitting || !schema}
+					>
+						{testing && <Loader2 className="size-3.5 animate-spin" />}
+						{testing
+							? t('dialog-credential-edit.testing')
+							: t('dialog-credential-edit.test')}
+					</Button>
 					<Button
 						variant="ghost"
 						onClick={() => onOpenChange(false)}
-						disabled={submitting}
+						disabled={submitting || testing}
 					>
 						<CircleAlert className="size-3.5" />
 						{t('common.cancel')}
 					</Button>
-					<Button onClick={handleSubmit} disabled={submitting || !schema}>
+					<Button onClick={handleSubmit} disabled={submitting || testing || !schema}>
 						{submitting ? (
 							<Loader2 className="size-3.5 animate-spin" />
 						) : (

@@ -16,11 +16,13 @@ export function useModels() {
 	 * Loads the model list for the specified provider type.
 	 * @param provider - e.g. "openai", "dashscope"
 	 */
-	const fetch = useCallback(async (provider: string) => {
+	const fetch = useCallback(async (provider: string, credentialData?: Record<string, unknown>) => {
 		setLoading(true);
 		setError(null);
 		try {
-			const res = await modelApi.list(provider);
+			const res = credentialData
+				? await modelApi.listFromCredential(credentialData)
+				: await modelApi.list(provider);
 			setModels(res.models);
 		} catch (e) {
 			setError(e as Error);

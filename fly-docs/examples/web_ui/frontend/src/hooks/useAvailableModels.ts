@@ -11,7 +11,8 @@ export interface CredentialWithModels {
 /**
  * Fetches all credentials and their available models, grouped by provider type.
  * Provider type is read from `credential.data.type`.
- * Credentials without a `type` field or whose model fetch fails are silently skipped.
+ * Model lists are resolved from each credential payload so OpenAI-compatible
+ * base URLs can return their actual model IDs instead of the built-in defaults.
  */
 export function useAvailableModels() {
 	const [groups, setGroups] = useState<Record<string, CredentialWithModels[]>>({});
@@ -31,10 +32,15 @@ export function useAvailableModels() {
 					if (!type) return;
 					if (!result[type]) result[type] = [];
 					try {
-						const { models } = await modelApi.list(type);
+						const { models } = await modelApi.listFromCredential(credential.data);
 						result[type].push({ credential, models });
 					} catch {
-						result[type].push({ credential, models: [] });
+						try {
+							const { models } = await modelApi.list(type);
+							result[type].push({ credential, models });
+						} catch {
+							result[type].push({ credential, models: [] });
+						}
 					}
 				}),
 			);

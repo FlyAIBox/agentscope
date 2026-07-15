@@ -171,9 +171,14 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 		setModelsLoading(true);
 		Promise.all([
 			modelApi
-				.list(type)
+				.listFromCredential(credential.data)
 				.then((res) => res.models)
-				.catch(() => [] as ModelCard[]),
+				.catch(() =>
+					modelApi
+						.list(type)
+						.then((res) => res.models)
+						.catch(() => [] as ModelCard[]),
+				),
 			ttsModelApi
 				.list(type)
 				.then((res) => res.models)

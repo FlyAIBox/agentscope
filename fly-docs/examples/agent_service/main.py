@@ -17,11 +17,20 @@
 
 详细文档：https://docs.agentscope.io/latest/en/deploy/agent-service
 """
+
+import asyncio
+import json
 import os
+from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.parse import urljoin
+from urllib.request import Request, urlopen
 
 import uvicorn
+from fastapi import HTTPException, status
 from fastapi.middleware import Middleware
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
 
 from agentscope.app import create_app, SubAgentTemplate
 from agentscope.app.message_bus import InMemoryMessageBus
@@ -31,6 +40,220 @@ from agentscope.app.workspace_manager import LocalWorkspaceManager
 from agentscope.mcp import MCPClient, StdioMCPConfig, HttpMCPConfig
 from agentscope.permission import PermissionContext, PermissionMode
 from agentscope.rag import QdrantStore
+
+
+class CredentialProbeRequest(BaseModel):
+    """用于从前端临时测试凭证，不会写入存储。"""
+
+    data: dict[str, Any] = Field(description="Credential payload.")
+
+
+class CredentialProbeResponse(BaseModel):
+    """凭证测试与动态模型探测结果。"""
+
+    ok: bool
+    models: list[dict[str, Any]]
+    total: int
+    message: str
+
+
+_DEFAULT_OPENAI_COMPATIBLE_BASE_URLS = {
+    "openai_credential": "https://api.openai.com/v1",
+    "dashscope_credential": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "deepseek_credential": "https://api.deepseek.com",
+    "moonshot_credential": "https://api.moonshot.cn/v1",
+}
+
+
+def _field_to_str(value: Any) -> str | None:
+    """把前端表单值或 Pydantic SecretStr 序列化后的值转成普通字符串。"""
+    if value is None:
+        return None
+    if hasattr(value, "get_secret_value"):
+        return value.get_secret_value()
+    text = str(value).strip()
+    return text or None
+
+
+def _join_endpoint(base_url: str, endpoint: str) -> str:
+    """Join URL paths without dropping nested gateway prefixes."""
+    if base_url.rstrip("/").endswith(f"/{endpoint}"):
+        return base_url.rstrip("/")
+    return urljoin(f"{base_url.rstrip('/')}/", endpoint)
+
+
+def _resolve_base_url(data: dict[str, Any]) -> str | None:
+    credential_type = _field_to_str(data.get("type"))
+    if credential_type == "ollama_credential":
+        return _field_to_str(data.get("host")) or "http://localhost:11434"
+    if credential_type == "xai_credential":
+        host = _field_to_str(data.get("api_host")) or "api.x.ai"
+        return (
+            host
+            if host.startswith(("http://", "https://"))
+            else f"https://{host}/v1"
+        )
+    return _field_to_str(
+        data.get("base_url"),
+    ) or _DEFAULT_OPENAI_COMPATIBLE_BASE_URLS.get(credential_type or "")
+
+
+def _request_json(url: str, headers: dict[str, str]) -> dict[str, Any]:
+    request = Request(url, headers=headers, method="GET")
+    try:
+        with urlopen(request, timeout=15) as response:
+            raw = response.read().decode("utf-8")
+    except HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace") or exc.reason
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"模型接口返回 {exc.code}: {detail}",
+        ) from exc
+    except URLError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"无法连接模型接口: {exc.reason}",
+        ) from exc
+
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="模型接口返回的不是有效 JSON。",
+        ) from exc
+
+
+def _looks_like_chat_model(model_name: str) -> bool:
+    lowered = model_name.lower()
+    non_chat_markers = (
+        "embedding",
+        "embed",
+        "rerank",
+        "moderation",
+        "whisper",
+        "tts",
+        "dall-e",
+        "bge-",
+    )
+    return not any(marker in lowered for marker in non_chat_markers)
+
+
+def _guess_context_size(model_name: str) -> int:
+    lowered = model_name.lower()
+    if any(
+        marker in lowered
+        for marker in ("gpt-4.1", "gpt-5", "gemini-1.5", "gemini-2")
+    ):
+        return 1_048_576
+    if "o4-mini" in lowered:
+        return 200_000
+    if any(
+        marker in lowered
+        for marker in ("gpt-4o", "deepseek", "moonshot", "kimi")
+    ):
+        return 128_000
+    if "qwen" in lowered:
+        return 131_072
+    return 128_000
+
+
+def _guess_output_size(model_name: str) -> int:
+    lowered = model_name.lower()
+    if any(marker in lowered for marker in ("gpt-4.1", "gpt-5", "o4-mini")):
+        return 32_768
+    if any(
+        marker in lowered
+        for marker in ("gpt-4o", "deepseek", "moonshot", "kimi", "qwen")
+    ):
+        return 16_384
+    return 4_096
+
+
+def _model_card(model_name: str) -> dict[str, Any]:
+    lowered = model_name.lower()
+    input_types = ["text/plain"]
+    output_types = ["text/plain"]
+    if any(
+        marker in lowered
+        for marker in ("vision", "4o", "4.1", "o4", "gpt-5", "vl")
+    ):
+        input_types.append("image/*")
+    if "audio" in lowered:
+        input_types.append("audio/*")
+        output_types.append("audio/*")
+
+    return {
+        "type": "chat_model",
+        "name": model_name,
+        "label": model_name,
+        "status": "active",
+        "deprecated_at": None,
+        "input_types": input_types,
+        "output_types": output_types,
+        "context_size": _guess_context_size(model_name),
+        "output_size": _guess_output_size(model_name),
+        "parameter_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+        "parameters_overrides": {},
+    }
+
+
+def _extract_model_names(
+    payload: dict[str, Any],
+    credential_type: str | None,
+) -> list[str]:
+    if credential_type == "ollama_credential":
+        items = payload.get("models", [])
+        return [
+            item["name"]
+            for item in items
+            if isinstance(item, dict) and isinstance(item.get("name"), str)
+        ]
+
+    items = payload.get("data", [])
+    names = []
+    for item in items:
+        if isinstance(item, dict):
+            value = item.get("id") or item.get("name")
+            if isinstance(value, str):
+                names.append(value)
+        elif isinstance(item, str):
+            names.append(item)
+    return names
+
+
+def _fetch_dynamic_models(data: dict[str, Any]) -> list[dict[str, Any]]:
+    credential_type = _field_to_str(data.get("type"))
+    base_url = _resolve_base_url(data)
+    if not base_url:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="请先填写模型服务地址。",
+        )
+
+    headers: dict[str, str] = {"Accept": "application/json"}
+    api_key = _field_to_str(data.get("api_key"))
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    organization = _field_to_str(data.get("organization"))
+    if organization:
+        headers["OpenAI-Organization"] = organization
+
+    url = (
+        _join_endpoint(base_url, "api/tags")
+        if credential_type == "ollama_credential"
+        else _join_endpoint(base_url, "models")
+    )
+    payload = _request_json(url, headers=headers)
+    names = _extract_model_names(payload, credential_type)
+    return [
+        _model_card(name) for name in names if _looks_like_chat_model(name)
+    ]
+
 
 # ---------------------------------------------------------------------------
 # 默认 MCP 工具配置
@@ -189,6 +412,42 @@ so anything you want them to see MUST be sent through `TeamSay`.""",
         ),
     ],
 )
+
+
+@app.post(
+    "/credential/test",
+    response_model=CredentialProbeResponse,
+    summary="Test a credential and fetch dynamic models",
+)
+async def test_credential(
+    body: CredentialProbeRequest,
+) -> CredentialProbeResponse:
+    """使用前端输入的地址和 key 临时拉取模型列表，验证凭证是否可用。"""
+    models = await asyncio.to_thread(_fetch_dynamic_models, body.data)
+    return CredentialProbeResponse(
+        ok=True,
+        models=models,
+        total=len(models),
+        message=f"连接成功，获取到 {len(models)} 个模型。",
+    )
+
+
+@app.post(
+    "/model/from-credential",
+    response_model=CredentialProbeResponse,
+    summary="Fetch dynamic models from a credential payload",
+)
+async def list_models_from_credential(
+    body: CredentialProbeRequest,
+) -> CredentialProbeResponse:
+    """按已保存或临时凭证动态获取模型列表，而不是只返回内置静态模型卡。"""
+    models = await asyncio.to_thread(_fetch_dynamic_models, body.data)
+    return CredentialProbeResponse(
+        ok=True,
+        models=models,
+        total=len(models),
+        message=f"获取到 {len(models)} 个模型。",
+    )
 
 
 if __name__ == "__main__":

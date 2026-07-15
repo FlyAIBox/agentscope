@@ -3,7 +3,12 @@ import { useState, useEffect } from 'react';
 
 import { credentialApi } from '@/api';
 import type { CredentialSchema } from '@/api';
-import { SchemaForm, type SchemaFormValue } from '@/components/form/SchemaForm';
+import {
+	SchemaForm,
+	defaultValuesFromSchema,
+	type SchemaFormValue,
+} from '@/components/form/SchemaForm';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import {
 	Dialog,
@@ -39,6 +44,11 @@ export function CreateCredentialDialog({ open, onOpenChange, onCreated, defaultT
 	const [selectedType, setSelectedType] = useState('');
 	const [values, setValues] = useState<Record<string, SchemaFormValue>>({});
 	const [submitting, setSubmitting] = useState(false);
+	const [testing, setTesting] = useState(false);
+	const [testResult, setTestResult] = useState<{
+		type: 'success' | 'error';
+		message: string;
+	} | null>(null);
 
 	useEffect(() => {
 		if (!open) return;
@@ -49,7 +59,13 @@ export function CreateCredentialDialog({ open, onOpenChange, onCreated, defaultT
 				setSchemas(res.schemas);
 				if (res.schemas.length > 0) {
 					const first = (res.schemas[0].properties.type?.const as string) ?? '';
-					setSelectedType(defaultType ?? first);
+					const nextType = defaultType ?? first;
+					const nextSchema = res.schemas.find(
+						(s) => (s.properties.type?.const as string) === nextType,
+					);
+					setSelectedType(nextType);
+					setValues(nextSchema ? defaultValuesFromSchema(nextSchema) : {});
+					setTestResult(null);
 				}
 			})
 			.finally(() => setLoadingSchemas(false));
@@ -61,19 +77,45 @@ export function CreateCredentialDialog({ open, onOpenChange, onCreated, defaultT
 
 	const handleTypeChange = (type: string) => {
 		setSelectedType(type);
-		setValues({});
+		const nextSchema = schemas.find((s) => (s.properties.type?.const as string) === type);
+		setValues(nextSchema ? defaultValuesFromSchema(nextSchema) : {});
+		setTestResult(null);
+	};
+
+	const buildData = () => {
+		if (!selectedSchema) return;
+		const data: Record<string, unknown> = { type: selectedType };
+		for (const [key, prop] of Object.entries(selectedSchema.properties)) {
+			if (key === 'id' || key === 'type' || prop.const !== undefined) continue;
+			const val = values[key];
+			if (val !== undefined && val !== '') data[key] = val;
+		}
+		return data;
+	};
+
+	const handleTest = async () => {
+		const data = buildData();
+		if (!data) return;
+		setTesting(true);
+		setTestResult(null);
+		try {
+			const res = await credentialApi.test({ data });
+			setTestResult({ type: 'success', message: res.message });
+		} catch (e) {
+			setTestResult({
+				type: 'error',
+				message: e instanceof Error ? e.message : t('dialog-credential-create.testFailed'),
+			});
+		} finally {
+			setTesting(false);
+		}
 	};
 
 	const handleSubmit = async () => {
-		if (!selectedSchema) return;
+		const data = buildData();
+		if (!data) return;
 		setSubmitting(true);
 		try {
-			const data: Record<string, unknown> = { type: selectedType };
-			for (const [key, prop] of Object.entries(selectedSchema.properties)) {
-				if (key === 'id' || key === 'type' || prop.const !== undefined) continue;
-				const val = values[key];
-				if (val !== undefined && val !== '') data[key] = val;
-			}
 			await create({ data });
 			onOpenChange(false);
 			onCreated?.();
@@ -124,20 +166,38 @@ export function CreateCredentialDialog({ open, onOpenChange, onCreated, defaultT
 						<SchemaForm
 							schema={selectedSchema}
 							values={values}
-							onChange={(key, val) => setValues((prev) => ({ ...prev, [key]: val }))}
+							onChange={(key, val) => {
+								setValues((prev) => ({ ...prev, [key]: val }));
+								setTestResult(null);
+							}}
 						/>
 					)}
 				</FieldGroup>
+				{testResult && (
+					<Alert variant={testResult.type === 'error' ? 'destructive' : 'default'}>
+						<AlertDescription>{testResult.message}</AlertDescription>
+					</Alert>
+				)}
 				<DialogFooter>
+					<Button
+						variant="outline"
+						onClick={handleTest}
+						disabled={testing || submitting || !selectedSchema}
+					>
+						{testing && <Loader2 className="size-3.5 animate-spin" />}
+						{testing
+							? t('dialog-credential-create.testing')
+							: t('dialog-credential-create.test')}
+					</Button>
 					<Button
 						variant="ghost"
 						onClick={() => onOpenChange(false)}
-						disabled={submitting}
+						disabled={submitting || testing}
 					>
 						<CircleAlert className="size-3.5" />
 						{t('common.cancel')}
 					</Button>
-					<Button onClick={handleSubmit} disabled={submitting || !selectedSchema}>
+					<Button onClick={handleSubmit} disabled={submitting || testing || !selectedSchema}>
 						{submitting ? (
 							<Loader2 className="size-3.5 animate-spin" />
 						) : (

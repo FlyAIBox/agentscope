@@ -326,6 +326,13 @@ export interface CredentialListResponse {
 	total: number;
 }
 
+export interface CredentialTestResponse {
+	ok: boolean;
+	models: ModelCard[];
+	total: number;
+	message: string;
+}
+
 // ─── Chat ─────────────────────────────────────────────────────────────────────
 
 export type { Msg, ContentBlock } from '@agentscope-ai/agentscope/message';
