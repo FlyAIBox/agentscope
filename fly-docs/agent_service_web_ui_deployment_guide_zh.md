@@ -705,6 +705,70 @@ unset SOCKS_PROXY SOCKS5_PROXY socks_proxy socks5_proxy ALL_PROXY all_proxy
 
 另外，若前端日志出现 `Credential '...' not found`，说明当前 Agent 或会话引用了已删除的 credential。重新选择现有 credential 创建会话，或删除旧 Agent 后重新创建。
 
+### 9.10 `git commit` 时 black 失败：`files were modified by this hook`
+
+修改 `fly-docs/examples/agent_service/main.py` 等示例代码并提交时，pre-commit 可能输出：
+
+```text
+black....................................................................Failed
+- hook id: black
+- files were modified by this hook
+
+reformatted fly-docs/examples/agent_service/main.py
+
+All done! ✨ 🍰 ✨
+1 file reformatted.
+```
+
+同一轮提交里，mypy / flake8 / pylint 往往显示 `(no files to check) Skipped`，只有 black 实际执行——这是预期行为，不是配置缺失。
+
+**black 是什么：**
+
+- **Black** 是 Python 代码格式化工具，会自动统一缩进、换行、引号、逗号等风格。
+- **pre-commit** 是 Git 提交钩子框架；本仓库在每次 `git commit` 时自动运行一系列检查，black 是其中之一。
+- 开发依赖在 `pyproject.toml` 的 `[dev]` 中；首次在本仓库提交前需执行一次 `pre-commit install` 注册钩子（参见 [agentscope_installation_guide_zh.md](./agentscope_installation_guide_zh.md)）。
+
+**配置位置：**
+
+仓库根目录 [`.pre-commit-config.yaml`](../.pre-commit-config.yaml) 第 56–60 行：
+
+```yaml
+- repo: https://github.com/psf/black
+  rev: 23.3.0
+  hooks:
+  - id: black
+    args: [--line-length=79]
+```
+
+行宽为 79 字符。同文件中 mypy、flake8、pylint 均已排除 `fly-docs`，但 **black 未排除**，因此 `fly-docs/` 下的 `.py` 文件仍会被格式化。
+
+**为何提交被中止：**
+
+black 发现文件不符合格式后会**自动改写磁盘上的文件**，然后以失败状态退出，中止本次 commit，提示你把格式化结果重新 stage 后再提交。常见改动包括：删除函数调用参数之间的空行（例如 `create_app(...)` 各关键字参数之间不应留空行）。
+
+**处理方式：**
+
+```bash
+# 方式 1：black 已自动改好文件，重新 stage 后提交即可
+git add fly-docs/examples/agent_service/main.py
+git commit
+
+# 方式 2：提交前先跑 black，避免 commit 中途被打断
+pre-commit run black --files fly-docs/examples/agent_service/main.py
+git add fly-docs/examples/agent_service/main.py
+git commit
+
+# 方式 3：手动格式化（参数需与 .pre-commit-config.yaml 一致）
+black --line-length=79 fly-docs/examples/agent_service/main.py
+git add fly-docs/examples/agent_service/main.py
+git commit
+```
+
+**相关经验：**
+
+- 若提交 `fly-docs/` 下多个 `main.py` 时 mypy 报 `Duplicate module named "main"`，说明类型检查未排除文档目录，处理方式见 [agentscope_installation_guide_zh.md § 6.4](./agentscope_installation_guide_zh.md#64-git-commit-时-mypy-报-duplicate-module-named-main)。
+- 向仓库新增带示例 `.py` 的文档目录时，应同步检查 `.pre-commit-config.yaml` 的 `exclude` 是否需覆盖该目录；若希望 `fly-docs` 示例不受 black 约束，可在 black 钩子下增加 `exclude: ^fly-docs`（当前仓库未启用此排除）。
+
 ## 10. 上线检查清单
 
 - [ ] AgentScope 通过 `.venv` 和 `uv pip install -e .` 从源码安装
