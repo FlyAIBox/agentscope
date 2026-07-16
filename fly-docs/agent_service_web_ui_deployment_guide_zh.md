@@ -18,10 +18,11 @@ uv pip install -e .
 
 仓库已提供统一管理脚本：`fly-docs/start_agent_service_web_ui.sh`。
 
+以下命令默认已进入 AgentScope 仓库根目录。Windows + VMware Ubuntu 虚拟机、Linux 服务器或 macOS 上的代码目录可能不同，文档不再写死某台机器的源码路径；请先在终端 `cd` 到你本机克隆的仓库目录，再复制后续命令。
+
 首次使用：
 
 ```bash
-cd /root/code/agentscope
 ./fly-docs/start_agent_service_web_ui.sh install
 ./fly-docs/start_agent_service_web_ui.sh start
 ```
@@ -83,17 +84,30 @@ docker --version || true
 redis-server --version || true
 ```
 
-macOS 无 Docker 时，前置条件改为本机 Redis 即可：`brew install redis`。
-
-若没有 pnpm，优先使用 Node.js 自带的 Corepack：
+若脚本提示 `[ERROR] 缺少命令：uv`，先安装 `uv`。Ubuntu 22.04 可执行：
 
 ```bash
+sudo apt update
+sudo apt install -y curl ca-certificates
+curl -LsSf https://astral.sh/uv/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"
+uv --version
+```
+
+`uv` 默认安装到当前用户的本地目录。若打开新终端后仍提示找不到 `uv`，重新执行上面的 `export PATH=...`，或按安装脚本最后输出的提示把对应目录加入 shell 配置。
+
+macOS 无 Docker 时，前置条件改为本机 Redis 即可：`brew install redis`。
+
+若脚本提示 `[ERROR] 缺少命令：pnpm`，先确认 Node.js 已可用，再安装 `pnpm`。优先使用 Node.js 自带的 Corepack：
+
+```bash
+node --version
 corepack enable
 corepack prepare pnpm@11.12.0 --activate
 pnpm --version
 ```
 
-若出现 `command not found: corepack`（常见于 Homebrew 安装的 Node，其配方通常不附带 Corepack），改用 npm 全局安装同一版本：
+若出现 `command not found: corepack`，或当前 Node 发行包没有附带 Corepack，改用 npm 全局安装同一版本：
 
 ```bash
 npm install -g pnpm@11.12.0
@@ -102,11 +116,9 @@ pnpm --version
 
 ## 3. AgentScope 源码安装
 
-进入仓库根目录。下文假设源码位于 `/root/code/agentscope`；其他机器请替换成实际绝对路径。
+先进入仓库根目录，再执行安装命令。不要在脚本或文档中固定某台机器的源码路径，换目录或换系统时只需要重新进入新的仓库根目录即可。
 
 ```bash
-cd /root/code/agentscope
-
 # 仅在 .venv 尚不存在时创建
 uv venv --python 3.11
 
@@ -166,7 +178,7 @@ allowBuilds:
 安装命令（推荐带 `CI=true`，与启动脚本 `install` 行为一致）：
 
 ```bash
-cd /root/code/agentscope/fly-docs/examples/web_ui
+cd fly-docs/examples/web_ui
 CI=true pnpm install --frozen-lockfile
 ```
 
@@ -218,25 +230,32 @@ docker exec agentscope-redis redis-cli ping
 docker start agentscope-redis
 ```
 
-macOS 若没有 Docker，可用 Homebrew 安装本机 Redis：
+如果没有 Docker，也可以安装本机 Redis。Ubuntu 22.04 示例：
+
+```bash
+sudo apt update
+sudo apt install -y redis-server
+```
+
+macOS 可用 Homebrew：
 
 ```bash
 brew install redis
 ```
 
-一次性后台启动（与启动脚本在无 Docker 时的行为一致）。数据目录放在仓库下，重启后不会被 `/tmp` 清理：
+一次性后台启动（与启动脚本在无 Docker 时的行为一致）。数据目录放在仓库下，运行目录优先使用系统运行时目录；没有该环境变量时回落到仓库内的 `.agentscope-example-runtime/`，避免写死跨系统不通用的临时目录：
 
 ```bash
-cd /root/code/agentscope
+RUN_DIR="${XDG_RUNTIME_DIR:-.agentscope-example-runtime}/agentscope-example-${UID:-local}"
 mkdir -p .agentscope-example-data/redis \
-  /tmp/agentscope-example-$UID/logs
+  "$RUN_DIR/logs"
 redis-server \
   --daemonize yes \
   --port 6379 \
   --dir "$PWD/.agentscope-example-data/redis" \
   --appendonly yes \
-  --pidfile /tmp/agentscope-example-$UID/redis.pid \
-  --logfile /tmp/agentscope-example-$UID/logs/redis.log
+  --pidfile "$RUN_DIR/redis.pid" \
+  --logfile "$RUN_DIR/logs/redis.log"
 ```
 
 也可以交给 brew 托管（开机可自启）：
@@ -251,12 +270,11 @@ brew services start redis
 redis-cli ping
 ```
 
-预期输出同样为 `PONG`。使用 `./fly-docs/start_agent_service_web_ui.sh start` 时，若未检测到 Docker 但本机有 `redis-server`，脚本会自动按上述方式启动 Redis。默认持久数据目录为仓库根目录下的 `.agentscope-example-data/`；如需改到其他磁盘，可设置 `AGENTSCOPE_EXAMPLE_DATA_DIR=/path/to/data`。
+预期输出同样为 `PONG`。使用 `./fly-docs/start_agent_service_web_ui.sh start` 时，若未检测到 Docker 但本机有 `redis-server`，脚本会自动按上述方式启动 Redis。默认持久数据目录为仓库根目录下的 `.agentscope-example-data/`；如需改到其他磁盘，可在启动前设置 `AGENTSCOPE_EXAMPLE_DATA_DIR` 为你的目标目录。
 
 ### 5.2 启动 Agent Service
 
 ```bash
-cd /root/code/agentscope
 source .venv/bin/activate
 cd fly-docs/examples/agent_service
 python main.py
@@ -282,7 +300,7 @@ python main.py
 新开终端：
 
 ```bash
-cd /root/code/agentscope/fly-docs/examples/web_ui
+cd fly-docs/examples/web_ui
 pnpm dev
 ```
 
@@ -355,7 +373,13 @@ curl --fail --silent --show-error \
 
 ### 7.1 systemd 管理 Agent Service
 
-创建 `/etc/systemd/system/agentscope-agent.service`：
+使用 systemd 时，服务文件里的 `WorkingDirectory` 和 `ExecStart` 必须写成部署机器上的真实路径。下面用 `<REPO_ROOT>` 表示仓库根目录，用 `<RUN_USER>` 表示运行用户；创建服务文件时替换成你机器上的实际值，不要把示例占位符原样复制运行。
+
+可以用 systemd 的编辑命令创建或覆盖服务文件：
+
+```bash
+sudo systemctl edit --force --full agentscope-agent.service
+```
 
 ```ini
 [Unit]
@@ -364,12 +388,12 @@ After=network.target docker.service
 
 [Service]
 Type=simple
-User=agentscope
-Group=agentscope
-WorkingDirectory=/opt/agentscope/fly-docs/examples/agent_service
+User=<RUN_USER>
+Group=<RUN_USER>
+WorkingDirectory=<REPO_ROOT>/fly-docs/examples/agent_service
 Environment=PYTHONUNBUFFERED=1
 # 可选：Environment=AMAP_API_KEY=替换为实际密钥
-ExecStart=/opt/agentscope/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000
+ExecStart=<REPO_ROOT>/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000
 Restart=always
 RestartSec=5
 
@@ -377,7 +401,7 @@ RestartSec=5
 WantedBy=multi-user.target
 ```
 
-把 `/opt/agentscope` 和运行用户替换为实际值，然后执行：
+保存后执行：
 
 ```bash
 sudo systemctl daemon-reload
@@ -391,7 +415,7 @@ journalctl -u agentscope-agent -f
 ### 7.2 构建并发布 Web UI
 
 ```bash
-cd /opt/agentscope/fly-docs/examples/web_ui
+cd fly-docs/examples/web_ui
 pnpm install --frozen-lockfile
 pnpm build
 ```
@@ -407,7 +431,7 @@ server {
     listen 80;
     server_name agentscope.example.com;
 
-    root /opt/agentscope/fly-docs/examples/web_ui/frontend/dist;
+    root <WEB_UI_DIST_DIR>;
     index index.html;
 
     location / {
@@ -480,7 +504,6 @@ sudo systemctl stop agentscope-agent
 系统可能只有 `python3`，而 `.venv` 中才有 `python`。先回到源码根目录并激活环境：
 
 ```bash
-cd /root/code/agentscope
 source .venv/bin/activate
 python --version
 ```
@@ -509,8 +532,8 @@ docker exec agentscope-redis redis-cli ping
 ```bash
 redis-cli ping
 lsof -nP -iTCP:6379 -sTCP:LISTEN
-# 日志（由启动脚本拉起时）
-tail -n 50 /tmp/agentscope-example-$UID/logs/redis.log
+# 日志（由启动脚本拉起时，先通过脚本查看日志目录）
+./fly-docs/start_agent_service_web_ui.sh logs -n 50
 ```
 
 预期 `redis-cli ping` 返回 `PONG`。示例默认连接 `localhost:6379`，因此 Redis 必须能从 Agent Service 所在主机通过该地址访问。
@@ -529,7 +552,7 @@ macOS：
 lsof -nP -iTCP:3000,5173,6379,8000 -sTCP:LISTEN
 ```
 
-不要直接杀死来源不明的进程。先用 `ps -fp <PID>`（Linux 还可看 `/proc/<PID>/cwd`）确认进程属于哪个项目，再决定停止或改端口。
+不要直接杀死来源不明的进程。先用 `ps -fp <PID>` 确认进程属于哪个项目，再决定停止或改端口。
 
 若确认是本示例残留进程，优先：
 
@@ -632,7 +655,6 @@ Error: Cannot find module '.../backend/node_modules/nodemon/bin/nodemon.js'
 
 ```bash
 # 1. 停掉脚本管理的进程，并回收残留端口
-cd /path/to/agentscope
 ./fly-docs/start_agent_service_web_ui.sh stop
 
 # 2. 确认 pnpm-workspace.yaml 已含（见第 4 节）：
@@ -647,7 +669,7 @@ CI=true pnpm install --frozen-lockfile
 test -f backend/node_modules/nodemon/bin/nodemon.js && echo nodemon OK
 
 # 4. 重新启动并检查状态
-cd /path/to/agentscope
+cd ../../..
 ./fly-docs/start_agent_service_web_ui.sh start
 ./fly-docs/start_agent_service_web_ui.sh status
 ```
@@ -685,7 +707,6 @@ Make sure to install httpx using `pip install httpx[socks]`.
 处理方式：
 
 ```bash
-cd /path/to/agentscope
 uv pip install --python .venv/bin/python "httpx[socks]"
 ./fly-docs/start_agent_service_web_ui.sh restart
 ```
