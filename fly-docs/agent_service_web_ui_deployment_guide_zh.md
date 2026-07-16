@@ -224,15 +224,16 @@ macOS 若没有 Docker，可用 Homebrew 安装本机 Redis：
 brew install redis
 ```
 
-一次性后台启动（与启动脚本在无 Docker 时的行为一致）：
+一次性后台启动（与启动脚本在无 Docker 时的行为一致）。数据目录放在仓库下，重启后不会被 `/tmp` 清理：
 
 ```bash
-mkdir -p /tmp/agentscope-example-$UID/redis-data \
+cd /root/code/agentscope
+mkdir -p .agentscope-example-data/redis \
   /tmp/agentscope-example-$UID/logs
 redis-server \
   --daemonize yes \
   --port 6379 \
-  --dir /tmp/agentscope-example-$UID/redis-data \
+  --dir "$PWD/.agentscope-example-data/redis" \
   --appendonly yes \
   --pidfile /tmp/agentscope-example-$UID/redis.pid \
   --logfile /tmp/agentscope-example-$UID/logs/redis.log
@@ -250,7 +251,7 @@ brew services start redis
 redis-cli ping
 ```
 
-预期输出同样为 `PONG`。使用 `./fly-docs/start_agent_service_web_ui.sh start` 时，若未检测到 Docker 但本机有 `redis-server`，脚本会自动按上述方式启动 Redis。
+预期输出同样为 `PONG`。使用 `./fly-docs/start_agent_service_web_ui.sh start` 时，若未检测到 Docker 但本机有 `redis-server`，脚本会自动按上述方式启动 Redis。默认持久数据目录为仓库根目录下的 `.agentscope-example-data/`；如需改到其他磁盘，可设置 `AGENTSCOPE_EXAMPLE_DATA_DIR=/path/to/data`。
 
 ### 5.2 启动 Agent Service
 

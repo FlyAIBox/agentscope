@@ -9,6 +9,9 @@ WEB_DIR="${REPO_ROOT}/fly-docs/examples/web_ui"
 VENV_DIR="${REPO_ROOT}/.venv"
 RUN_DIR="${XDG_RUNTIME_DIR:-/tmp}/agentscope-example-${UID}"
 LOG_DIR="${RUN_DIR}/logs"
+DATA_DIR="${AGENTSCOPE_EXAMPLE_DATA_DIR:-${REPO_ROOT}/.agentscope-example-data}"
+REDIS_DATA_DIR="${REDIS_DATA_DIR:-${DATA_DIR}/redis}"
+export AGENTSCOPE_EXAMPLE_DATA_DIR="${DATA_DIR}"
 
 REDIS_CONTAINER="${REDIS_CONTAINER:-agentscope-redis}"
 REDIS_PORT="${REDIS_PORT:-6379}"
@@ -17,6 +20,7 @@ WEB_BACKEND_PORT="${WEB_BACKEND_PORT:-3000}"
 WEB_FRONTEND_PORT="${WEB_FRONTEND_PORT:-5173}"
 
 mkdir -p "${LOG_DIR}"
+mkdir -p "${REDIS_DATA_DIR}"
 
 info() { printf '[INFO] %s\n' "$*"; }
 warn() { printf '[WARN] %s\n' "$*" >&2; }
@@ -217,17 +221,15 @@ start_redis() {
                 --name "${REDIS_CONTAINER}" \
                 --restart unless-stopped \
                 -p "${REDIS_PORT}:6379" \
-                -v agentscope-redis-data:/data \
+                -v "${REDIS_DATA_DIR}:/data" \
                 redis:7-alpine redis-server --appendonly yes >/dev/null
         fi
     elif command -v redis-server >/dev/null 2>&1; then
-        local redis_data="${RUN_DIR}/redis-data"
-        mkdir -p "${redis_data}"
-        info "Docker 不可用，使用本机 redis-server（数据目录：${redis_data}）"
+        info "Docker 不可用，使用本机 redis-server（数据目录：${REDIS_DATA_DIR}）"
         redis-server \
             --daemonize yes \
             --port "${REDIS_PORT}" \
-            --dir "${redis_data}" \
+            --dir "${REDIS_DATA_DIR}" \
             --appendonly yes \
             --pidfile "${RUN_DIR}/redis.pid" \
             --logfile "${LOG_DIR}/redis.log"
@@ -292,6 +294,7 @@ start_all() {
     printf '  Agent API:    http://127.0.0.1:%s\n' "${AGENT_PORT}"
     printf '  API 文档:     http://127.0.0.1:%s/docs\n' "${AGENT_PORT}"
     printf '  运行日志:     %s\n' "${LOG_DIR}"
+    printf '  持久数据:     %s\n' "${DATA_DIR}"
 }
 
 stop_all() {

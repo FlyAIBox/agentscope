@@ -41,6 +41,12 @@ from agentscope.mcp import MCPClient, StdioMCPConfig, HttpMCPConfig
 from agentscope.permission import PermissionContext, PermissionMode
 from agentscope.rag import QdrantStore
 
+DATA_DIR = os.getenv(
+    "AGENTSCOPE_EXAMPLE_DATA_DIR",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), ".data"),
+)
+os.makedirs(DATA_DIR, exist_ok=True)
+
 
 class CredentialProbeRequest(BaseModel):
     """用于从前端临时测试凭证，不会写入存储。"""
@@ -302,9 +308,9 @@ storage = RedisStorage(
 )
 
 # 向量存储：知识库 RAG 检索的 embedding 存放处。
-# location=":memory:" 表示进程内内存 Qdrant，重启后数据丢失，仅适合示例/开发。
-# 生产环境应改为持久化 Qdrant 服务（如 http://localhost:6333）。
-vector_store = QdrantStore(location=":memory:")
+# 默认写入本地目录，避免重启后知识库向量索引丢失。
+# 生产环境可改为持久化 Qdrant 服务（如 http://localhost:6333）。
+vector_store = QdrantStore(location=os.path.join(DATA_DIR, "qdrant"))
 
 # ---------------------------------------------------------------------------
 # 创建 FastAPI 应用

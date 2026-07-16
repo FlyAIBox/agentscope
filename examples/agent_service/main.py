@@ -15,6 +15,12 @@ from agentscope.mcp import MCPClient, StdioMCPConfig, HttpMCPConfig
 from agentscope.permission import PermissionContext, PermissionMode
 from agentscope.rag import QdrantStore
 
+DATA_DIR = os.getenv(
+    "AGENTSCOPE_EXAMPLE_DATA_DIR",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), ".data"),
+)
+os.makedirs(DATA_DIR, exist_ok=True)
+
 default_mcps = [
     MCPClient(
         name="browser-use",
@@ -43,7 +49,7 @@ storage = RedisStorage(
     port=6379,
 )
 
-vector_store = QdrantStore(location=":memory:")
+vector_store = QdrantStore(location=os.path.join(DATA_DIR, "qdrant"))
 
 app = create_app(
     storage=storage,
@@ -65,9 +71,9 @@ app = create_app(
         # The default MCP servers that will be added into the workspace
         default_mcps=default_mcps,
     ),
-    # Knowledge base feature — backed by an in-memory Qdrant store. The
-    # CollectionPerKbManager allocates one collection per knowledge base,
-    # so any embedding dimension is allowed.
+    # Knowledge base feature — backed by a local persistent Qdrant store.
+    # The CollectionPerKbManager allocates one collection per knowledge
+    # base, so any embedding dimension is allowed.
     knowledge_base_manager=CollectionPerKbManager(
         storage=storage,
         vector_store=vector_store,

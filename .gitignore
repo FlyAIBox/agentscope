@@ -166,6 +166,9 @@ yarn-error.log*
 lerna-debug.log*
 
 # Agent Service example runtime artifacts
+.agentscope-example-data/
+examples/agent_service/.data/
 fly-docs/examples/agent_service/.playwright-mcp/
 fly-docs/examples/agent_service/blobs/
+fly-docs/examples/agent_service/.data/
 fly-docs/examples/agent_service/workspaces/

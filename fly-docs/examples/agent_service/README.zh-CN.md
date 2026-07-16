@@ -38,8 +38,13 @@ brew services start redis
 sudo apt install redis-server
 sudo systemctl start redis-server
 
-# Docker（跨平台）
-docker run --rm -p 6379:6379 redis:7
+# Docker（跨平台，带持久化）
+docker run -d \
+  --name agentscope-redis \
+  --restart unless-stopped \
+  -p 6379:6379 \
+  -v agentscope-redis-data:/data \
+  redis:7-alpine redis-server --appendonly yes
 ```
 
 启动 Agent 服务：
